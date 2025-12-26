@@ -111,6 +111,7 @@ export default function App() {
           documents={documents}
           onDeleteDocument={deleteDocument}
           onViewDocument={goToViewer}
+          onCreateChatbot={createChatbot}
           onBack={goToHome}
         />
       )}
