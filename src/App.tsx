@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { HomePage } from './components/HomePage';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { DocumentViewer } from './components/DocumentViewer';
 import { ChatbotInterface } from './components/ChatbotInterface';
-import { Toaster } from 'sonner@2.0.3';
+import { LoginPage } from './components/LoginPage';
+import { RegisterPage } from './components/RegisterPage';
+import { Toaster } from 'sonner';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 export interface Document {
   id: string;
@@ -34,13 +37,86 @@ export interface RelatedDocument {
 }
 
 type Screen = 'home' | 'library' | 'viewer' | 'chatbot';
+type AuthScreen = 'login' | 'register';
 
-export default function App() {
-  const [currentScreen, setCurrentScreen] = useState<Screen>('home');
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [chatbots, setChatbots] = useState<Chatbot[]>([]);
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
-  const [selectedChatbotId, setSelectedChatbotId] = useState<string | null>(null);
+function AppContent() {
+  const { user, isAuthenticated, isLoading, logout } = useAuth();
+  const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
+  
+  // Load from localStorage on mount
+  const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
+    const saved = localStorage.getItem('currentScreen');
+    return (saved as Screen) || 'home';
+  });
+  
+  const [documents, setDocuments] = useState<Document[]>(() => {
+    const saved = localStorage.getItem('documents');
+    return saved ? JSON.parse(saved) : [];
+  });
+  
+  const [chatbots, setChatbots] = useState<Chatbot[]>(() => {
+    const saved = localStorage.getItem('chatbots');
+    return saved ? JSON.parse(saved) : [];
+  });
+  
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(() => {
+    return localStorage.getItem('selectedDocumentId') || null;
+  });
+  
+  const [selectedChatbotId, setSelectedChatbotId] = useState<string | null>(() => {
+    return localStorage.getItem('selectedChatbotId') || null;
+  });
+
+  // Save to localStorage whenever data changes
+  useEffect(() => {
+    localStorage.setItem('documents', JSON.stringify(documents));
+  }, [documents]);
+
+  useEffect(() => {
+    localStorage.setItem('chatbots', JSON.stringify(chatbots));
+  }, [chatbots]);
+
+  useEffect(() => {
+    localStorage.setItem('currentScreen', currentScreen);
+  }, [currentScreen]);
+
+  useEffect(() => {
+    if (selectedDocumentId) {
+      localStorage.setItem('selectedDocumentId', selectedDocumentId);
+    } else {
+      localStorage.removeItem('selectedDocumentId');
+    }
+  }, [selectedDocumentId]);
+
+  useEffect(() => {
+    if (selectedChatbotId) {
+      localStorage.setItem('selectedChatbotId', selectedChatbotId);
+    } else {
+      localStorage.removeItem('selectedChatbotId');
+    }
+  }, [selectedChatbotId]);
+
+  // Show loading screen while checking authentication
+  if (isLoading) {
+    return (
+      <div className="h-full max-h-full overflow-hidden bg-[#1E1E1E] flex items-center justify-center">
+        <div className="text-[#E8F0A5] text-xl">Loading...</div>
+      </div>
+    );
+  }
+
+  // Show login/register screens if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <div className="h-full max-h-full overflow-hidden bg-[#1E1E1E]">
+        {authScreen === 'login' ? (
+          <LoginPage onSwitchToRegister={() => setAuthScreen('register')} />
+        ) : (
+          <RegisterPage onSwitchToLogin={() => setAuthScreen('login')} />
+        )}
+      </div>
+    );
+  }
 
   const addDocument = (doc: Document) => {
     setDocuments(prev => [...prev, doc]);
@@ -92,7 +168,7 @@ export default function App() {
   const selectedChatbot = chatbots.find(bot => bot.id === selectedChatbotId);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-full max-h-full overflow-hidden bg-gray-50">
       <Toaster position="top-right" />
       
       {currentScreen === 'home' && (
@@ -133,6 +209,16 @@ export default function App() {
           onBack={goToHome}
         />
       )}
+      
+      <Toaster position="top-right" />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }

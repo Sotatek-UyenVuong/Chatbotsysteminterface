@@ -132,3 +132,40 @@
 html {
   font-size: var(--font-size);
 }
+
+/* CRITICAL FIX: Force no page scroll - must be OUTSIDE @layer to override Tailwind */
+html, 
+html body {
+  height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+  position: fixed !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  top: 0 !important;
+  left: 0 !important;
+}
+
+#root {
+  height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+  width: 100% !important;
+}
+
+/* Enable proper flexbox scrolling */
+.overflow-y-auto {
+  overflow-y: auto !important;
+}
+
+/* Word wrapping for long content */
+.break-words {
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+  word-break: break-word !important;
+}
+
+.overflow-wrap-anywhere {
+  overflow-wrap: anywhere !important;
+}

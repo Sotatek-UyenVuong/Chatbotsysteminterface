@@ -2223,3 +2223,17 @@ html {
     transform: none;
   }
 }
+
+/* CRITICAL FIX: Prevent page scroll - Override Tailwind */
+html,
+html, body {
+  height: 100% !important;
+  overflow: hidden !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+#root {
+  height: 100% !important;
+  overflow: hidden !important;
+}

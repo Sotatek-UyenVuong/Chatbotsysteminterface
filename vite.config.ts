@@ -54,7 +54,13 @@
       outDir: 'build',
     },
     server: {
-      port: 3000,
+      host: true, // Listen on all network interfaces (0.0.0.0)
+      port: 5005,
       open: true,
+      allowedHosts: [
+        'cadbot.sotaagents.ai',
+        'localhost',
+        '.sotaagents.ai', // Allow all subdomains of sotaagents.ai
+      ],
     },
   });
