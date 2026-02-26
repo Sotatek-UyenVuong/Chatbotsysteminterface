@@ -1,12 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { HomePage } from './components/HomePage';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { DocumentViewer } from './components/DocumentViewer';
 import { ChatbotInterface } from './components/ChatbotInterface';
 import { LoginPage } from './components/LoginPage';
-import { RegisterPage } from './components/RegisterPage';
-import { Toaster } from 'sonner';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { Toaster } from 'sonner@2.0.3';
 
 export interface Document {
   id: string;
@@ -36,87 +34,22 @@ export interface RelatedDocument {
   page: number;
 }
 
-type Screen = 'home' | 'library' | 'viewer' | 'chatbot';
-type AuthScreen = 'login' | 'register';
+type Screen = 'login' | 'home' | 'library' | 'viewer' | 'chatbot';
 
-function AppContent() {
-  const { user, isAuthenticated, isLoading, logout } = useAuth();
-  const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
-  
-  // Load from localStorage on mount
-  const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
-    const saved = localStorage.getItem('currentScreen');
-    return (saved as Screen) || 'home';
-  });
-  
-  const [documents, setDocuments] = useState<Document[]>(() => {
-    const saved = localStorage.getItem('documents');
-    return saved ? JSON.parse(saved) : [];
-  });
-  
-  const [chatbots, setChatbots] = useState<Chatbot[]>(() => {
-    const saved = localStorage.getItem('chatbots');
-    return saved ? JSON.parse(saved) : [];
-  });
-  
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(() => {
-    return localStorage.getItem('selectedDocumentId') || null;
-  });
-  
-  const [selectedChatbotId, setSelectedChatbotId] = useState<string | null>(() => {
-    return localStorage.getItem('selectedChatbotId') || null;
-  });
+export default function App() {
+  const [currentScreen, setCurrentScreen] = useState<Screen>('login');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [userEmail, setUserEmail] = useState<string>('');
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [chatbots, setChatbots] = useState<Chatbot[]>([]);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
+  const [selectedChatbotId, setSelectedChatbotId] = useState<string | null>(null);
 
-  // Save to localStorage whenever data changes
-  useEffect(() => {
-    localStorage.setItem('documents', JSON.stringify(documents));
-  }, [documents]);
-
-  useEffect(() => {
-    localStorage.setItem('chatbots', JSON.stringify(chatbots));
-  }, [chatbots]);
-
-  useEffect(() => {
-    localStorage.setItem('currentScreen', currentScreen);
-  }, [currentScreen]);
-
-  useEffect(() => {
-    if (selectedDocumentId) {
-      localStorage.setItem('selectedDocumentId', selectedDocumentId);
-    } else {
-      localStorage.removeItem('selectedDocumentId');
-    }
-  }, [selectedDocumentId]);
-
-  useEffect(() => {
-    if (selectedChatbotId) {
-      localStorage.setItem('selectedChatbotId', selectedChatbotId);
-    } else {
-      localStorage.removeItem('selectedChatbotId');
-    }
-  }, [selectedChatbotId]);
-
-  // Show loading screen while checking authentication
-  if (isLoading) {
-    return (
-      <div className="h-full max-h-full overflow-hidden bg-[#1E1E1E] flex items-center justify-center">
-        <div className="text-[#E8F0A5] text-xl">Loading...</div>
-      </div>
-    );
-  }
-
-  // Show login/register screens if not authenticated
-  if (!isAuthenticated) {
-    return (
-      <div className="h-full max-h-full overflow-hidden bg-[#1E1E1E]">
-        {authScreen === 'login' ? (
-          <LoginPage onSwitchToRegister={() => setAuthScreen('register')} />
-        ) : (
-          <RegisterPage onSwitchToLogin={() => setAuthScreen('login')} />
-        )}
-      </div>
-    );
-  }
+  const handleLogin = (email: string, password: string) => {
+    setIsAuthenticated(true);
+    setUserEmail(email);
+    setCurrentScreen('home');
+  };
 
   const addDocument = (doc: Document) => {
     setDocuments(prev => [...prev, doc]);
@@ -168,57 +101,55 @@ function AppContent() {
   const selectedChatbot = chatbots.find(bot => bot.id === selectedChatbotId);
 
   return (
-    <div className="h-full max-h-full overflow-hidden bg-gray-50">
+    <div className="min-h-screen bg-gray-50">
       <Toaster position="top-right" />
       
-      {currentScreen === 'home' && (
-        <HomePage 
-          onDocumentUpload={addDocument}
-          onGoToLibrary={goToLibrary}
-          onViewDocument={goToViewer}
-          onCreateChatbot={createChatbot}
-          documents={documents}
-          documentCount={documents.length}
-        />
+      {!isAuthenticated && currentScreen === 'login' && (
+        <LoginPage onLogin={handleLogin} />
       )}
 
-      {currentScreen === 'library' && (
-        <DocumentLibrary
-          documents={documents}
-          onDeleteDocument={deleteDocument}
-          onViewDocument={goToViewer}
-          onCreateChatbot={createChatbot}
-          onBack={goToHome}
-        />
-      )}
+      {isAuthenticated && (
+        <>
+          {currentScreen === 'home' && (
+            <HomePage 
+              onDocumentUpload={addDocument}
+              onGoToLibrary={goToLibrary}
+              onViewDocument={goToViewer}
+              onCreateChatbot={createChatbot}
+              documents={documents}
+              documentCount={documents.length}
+            />
+          )}
 
-      {currentScreen === 'viewer' && selectedDocument && (
-        <DocumentViewer
-          document={selectedDocument}
-          onCreateChatbot={createChatbot}
-          onBack={() => setCurrentScreen('library')}
-        />
-      )}
+          {currentScreen === 'library' && (
+            <DocumentLibrary
+              documents={documents}
+              onDeleteDocument={deleteDocument}
+              onViewDocument={goToViewer}
+              onCreateChatbot={createChatbot}
+              onBack={goToHome}
+            />
+          )}
 
-      {currentScreen === 'chatbot' && selectedChatbot && (
-        <ChatbotInterface
-          chatbot={selectedChatbot}
-          documents={documents}
-          onSendMessage={(message) => addMessageToChatbot(selectedChatbot.id, message)}
-          onViewDocument={goToViewer}
-          onBack={goToHome}
-        />
+          {currentScreen === 'viewer' && selectedDocument && (
+            <DocumentViewer
+              document={selectedDocument}
+              onCreateChatbot={createChatbot}
+              onBack={() => setCurrentScreen('library')}
+            />
+          )}
+
+          {currentScreen === 'chatbot' && selectedChatbot && (
+            <ChatbotInterface
+              chatbot={selectedChatbot}
+              documents={documents}
+              onSendMessage={(message) => addMessageToChatbot(selectedChatbot.id, message)}
+              onViewDocument={goToViewer}
+              onBack={goToHome}
+            />
+          )}
+        </>
       )}
-      
-      <Toaster position="top-right" />
     </div>
-  );
-}
-
-export default function App() {
-  return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
   );
 }
