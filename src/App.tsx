@@ -26,6 +26,19 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   relatedDocuments?: RelatedDocument[];
+  imageUrl?: string;
+  boundingBoxes?: BoundingBox[];
+}
+
+export interface BoundingBox {
+  id: string;
+  x: number; // percentage
+  y: number; // percentage
+  width: number; // percentage
+  height: number; // percentage
+  label?: string;
+  confidence?: number;
+  isCorrect?: boolean; // user feedback
 }
 
 export interface RelatedDocument {

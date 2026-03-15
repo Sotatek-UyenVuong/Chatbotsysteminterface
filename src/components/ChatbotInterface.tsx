@@ -11,15 +11,20 @@ import {
   ChevronRight,
   ZoomIn,
   ZoomOut,
+  Ruler,
+  ImageIcon,
 } from "lucide-react";
 import type {
   Chatbot,
   Message,
   Document,
   RelatedDocument,
+  BoundingBox,
 } from "../App";
 import { getFileTypeConfig } from "../utils/fileTypeUtils";
 import { FileIcon } from "./FileIcon";
+import { ImageAnnotationViewer } from "./ImageAnnotationViewer";
+import { AreaCalculator } from "./AreaCalculator";
 
 interface ChatbotInterfaceProps {
   chatbot: Chatbot;
@@ -56,6 +61,13 @@ export function ChatbotInterface({
     useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [zoom, setZoom] = useState(100);
+  const [showAnnotationViewer, setShowAnnotationViewer] = useState(false);
+  const [selectedAnnotationData, setSelectedAnnotationData] = useState<{
+    imageUrl: string;
+    boundingBoxes: BoundingBox[];
+    messageId: string;
+  } | null>(null);
+  const [showAreaCalculator, setShowAreaCalculator] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const currentDocument = documents.find(
@@ -92,8 +104,18 @@ export function ChatbotInterface({
 
     onSendMessage(userMessage);
 
-    // Simulate AI response with related documents
+    // Simulate AI response
     setTimeout(() => {
+      const lowerInput = input.toLowerCase();
+      
+      // Check if asking about counting objects
+      const isCountingQuery = 
+        lowerInput.includes("bao nhiêu") ||
+        lowerInput.includes("đếm") ||
+        lowerInput.includes("số lượng") ||
+        lowerInput.includes("how many") ||
+        lowerInput.includes("count");
+      
       const relatedDocs: RelatedDocument[] = documents
         .filter((doc) => doc.id !== chatbot.documentId)
         .slice(0, 2)
@@ -103,26 +125,104 @@ export function ChatbotInterface({
           page: Math.floor(Math.random() * 10) + 1,
         }));
 
+      // Create mock bounding boxes for counting queries
+      const mockBoundingBoxes: BoundingBox[] = isCountingQuery
+        ? [
+            {
+              id: "box-1",
+              x: 15,
+              y: 20,
+              width: 25,
+              height: 35,
+              label: "Refrigerator",
+              confidence: 0.92,
+            },
+            {
+              id: "box-2",
+              x: 55,
+              y: 25,
+              width: 22,
+              height: 32,
+              label: "Refrigerator",
+              confidence: 0.88,
+            },
+            {
+              id: "box-3",
+              x: 30,
+              y: 55,
+              width: 20,
+              height: 28,
+              label: "Refrigerator",
+              confidence: 0.75,
+            },
+          ]
+        : [];
+
       const assistantMessage: Message = {
         id: `msg-${Date.now()}-ai`,
         role: "assistant",
-        content: `Based on the document "${chatbot.documentName}", I can answer your question. ${
-          input.toLowerCase().includes("search") ||
-          input.toLowerCase().includes("find")
-            ? "I found some related documents that you might be interested in."
-            : "This content is mentioned in your document."
-        }`,
+        content: isCountingQuery
+          ? `I found ${mockBoundingBoxes.length} refrigerators in the image. I've highlighted them with bounding boxes. Click on the image to review and correct the detections.`
+          : `Based on the document "${chatbot.documentName}", I can answer your question. ${
+              lowerInput.includes("search") ||
+              lowerInput.includes("find")
+                ? "I found some related documents that you might be interested in."
+                : "This content is mentioned in your document."
+            }`,
         relatedDocuments:
-          input.toLowerCase().includes("search") ||
-          input.toLowerCase().includes("find")
+          lowerInput.includes("search") ||
+          lowerInput.includes("find")
             ? relatedDocs
             : [],
+        imageUrl: isCountingQuery
+          ? "https://images.unsplash.com/photo-1758488438758-5e2eedf769ce?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBraXRjaGVuJTIwcmVmcmlnZXJhdG9yJTIwYXBwbGlhbmNlc3xlbnwxfHx8fDE3NzM1NjA1NjN8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral"
+          : undefined,
+        boundingBoxes: isCountingQuery ? mockBoundingBoxes : undefined,
       };
 
       onSendMessage(assistantMessage);
     }, 1000);
 
     setInput("");
+  };
+
+  const handleImageClick = (message: Message) => {
+    if (message.imageUrl && message.boundingBoxes) {
+      setSelectedAnnotationData({
+        imageUrl: message.imageUrl,
+        boundingBoxes: message.boundingBoxes,
+        messageId: message.id,
+      });
+      setShowAnnotationViewer(true);
+    }
+  };
+
+  const handleSaveFeedback = (boxes: BoundingBox[]) => {
+    console.log("User feedback saved:", boxes);
+    // In a real app, you would send this to your backend
+    // For now, we'll just log it
+    const correctBoxes = boxes.filter((b) => b.isCorrect === true);
+    const incorrectBoxes = boxes.filter((b) => b.isCorrect === false);
+    
+    alert(
+      `Feedback saved!\n✅ Correct: ${correctBoxes.length}\n❌ Incorrect: ${incorrectBoxes.length}\n\nThis will help improve future predictions.`
+    );
+    setShowAnnotationViewer(false);
+  };
+
+  const handleSaveAreas = (imageUrl: string, areas: any[]) => {
+    console.log("Areas saved:", areas);
+    const totalArea = areas.reduce((sum, a) => sum + a.area, 0);
+    
+    // Create a message with area calculation results
+    const resultMessage: Message = {
+      id: `msg-${Date.now()}-area-result`,
+      role: "assistant",
+      content: `Area calculation completed!\n\nI measured ${areas.length} area(s) with a total of ${Math.round(totalArea).toLocaleString()} px².\n\nDetails:\n${areas.map((a, i) => `• Area ${i + 1} (${a.type}): ${Math.round(a.area).toLocaleString()} px²`).join("\n")}`,
+    };
+    
+    onSendMessage(resultMessage);
+    setShowAreaCalculator(false);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -265,6 +365,35 @@ export function ChatbotInterface({
                             </p>
                           </div>
 
+                          {/* Image with Bounding Boxes */}
+                          {message.imageUrl && (
+                            <div
+                              className="mt-3 cursor-pointer group"
+                              onClick={() => handleImageClick(message)}
+                            >
+                              <div className="relative rounded-xl overflow-hidden border-2 border-[#72C16B] hover:border-[#7FE0EE] transition-all duration-300 hover:shadow-lg hover:shadow-[#72C16B]/50">
+                                <img
+                                  src={message.imageUrl}
+                                  alt="AI Detection Result"
+                                  className="w-full h-auto"
+                                />
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-all duration-300 flex items-center justify-center">
+                                  <div className="opacity-0 group-hover:opacity-100 transition-all duration-300 bg-[#424F42]/90 px-4 py-2 rounded-xl">
+                                    <p className="text-white text-sm flex items-center gap-2">
+                                      <ImageIcon className="w-4 h-4" />
+                                      Click to review & edit detections
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                              {message.boundingBoxes && (
+                                <p className="text-[#E8F0A5] text-sm mt-2">
+                                  📦 {message.boundingBoxes.length} objects detected · Click image to verify
+                                </p>
+                              )}
+                            </div>
+                          )}
+
                           {/* Related Documents */}
                           {message.relatedDocuments &&
                             message.relatedDocuments.length >
@@ -334,6 +463,20 @@ export function ChatbotInterface({
 
           {/* Input Area */}
           <div className="bg-[#424F42] border-t border-[rgba(101,104,89,0.3)] flex-shrink-0 p-4">
+            <div className="flex gap-3 mb-3">
+              <button
+                onClick={() => setShowAreaCalculator(true)}
+                className="px-4 py-2 bg-[#656859] hover:bg-[#72C16B] text-[#E8F0A5] rounded-xl transition-all duration-300 flex items-center gap-2 hover:scale-105"
+                title="Calculate area in images"
+              >
+                <Ruler className="w-4 h-4" />
+                <span className="text-sm">Area Calculator</span>
+              </button>
+              <div className="flex-1" />
+              <div className="text-[#E8F0A5] text-xs flex items-center gap-2">
+                <span>💡 Try: "How many refrigerators?"</span>
+              </div>
+            </div>
             <div className="flex gap-3">
               <input
                 type="text"
@@ -489,6 +632,24 @@ export function ChatbotInterface({
           </div>
         </div>
       </div>
+
+      {/* Image Annotation Viewer Modal */}
+      {showAnnotationViewer && selectedAnnotationData && (
+        <ImageAnnotationViewer
+          imageUrl={selectedAnnotationData.imageUrl}
+          boundingBoxes={selectedAnnotationData.boundingBoxes}
+          onSaveFeedback={handleSaveFeedback}
+          onClose={() => setShowAnnotationViewer(false)}
+        />
+      )}
+
+      {/* Area Calculator Modal */}
+      {showAreaCalculator && (
+        <AreaCalculator
+          onSaveAreas={handleSaveAreas}
+          onClose={() => setShowAreaCalculator(false)}
+        />
+      )}
     </div>
   );
 }
