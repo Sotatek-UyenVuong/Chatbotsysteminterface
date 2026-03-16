@@ -2,23 +2,24 @@ import { useState, useRef, useEffect } from "react";
 import {
   ZoomIn,
   ZoomOut,
-  Move,
   X,
-  Check,
-  RotateCcw,
   Save,
-  Square,
+  RotateCcw,
+  Eye,
+  EyeOff,
+  Trash2,
 } from "lucide-react";
 
 export interface BoundingBox {
   id: string;
-  x: number; // percentage
-  y: number; // percentage
-  width: number; // percentage
-  height: number; // percentage
+  x: number; // pixels
+  y: number; // pixels
+  width: number; // pixels
+  height: number; // pixels
   label?: string;
   confidence?: number;
   isCorrect?: boolean; // user feedback
+  visible?: boolean;
 }
 
 type ResizeHandle =
@@ -26,10 +27,6 @@ type ResizeHandle =
   | "top-right"
   | "bottom-left"
   | "bottom-right"
-  | "top"
-  | "right"
-  | "bottom"
-  | "left"
   | null;
 
 interface ImageAnnotationViewerProps {
@@ -39,13 +36,26 @@ interface ImageAnnotationViewerProps {
   onClose?: () => void;
 }
 
+const BOX_COLORS = [
+  "#72C16B",
+  "#7FE0EE",
+  "#E8F0A5",
+  "#FF6B6B",
+  "#4ECDC4",
+  "#95E1D3",
+  "#F38181",
+  "#AA96DA",
+];
+
 export function ImageAnnotationViewer({
   imageUrl,
   boundingBoxes: initialBoxes,
   onSaveFeedback,
   onClose,
 }: ImageAnnotationViewerProps) {
-  const [boxes, setBoxes] = useState<BoundingBox[]>(initialBoxes);
+  const [boxes, setBoxes] = useState<BoundingBox[]>(
+    initialBoxes.map((box) => ({ ...box, visible: box.visible !== false }))
+  );
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -54,15 +64,13 @@ export function ImageAnnotationViewer({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [resizeHandle, setResizeHandle] = useState<ResizeHandle>(null);
-  const [resizeStart, setResizeStart] = useState({ x: 0, y: 0 });
+  const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [hasChanges, setHasChanges] = useState(false);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
-  const [drawingBox, setDrawingBox] = useState<{ x: number; y: number } | null>(
-    null
-  );
-  const [currentDrawingBox, setCurrentDrawingBox] = useState<BoundingBox | null>(
-    null
-  );
+  const [drawingBox, setDrawingBox] = useState<{ x: number; y: number } | null>(null);
+  const [currentDrawingBox, setCurrentDrawingBox] = useState<BoundingBox | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -75,21 +83,32 @@ export function ImageAnnotationViewer({
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 1 || e.button === 2 || e.shiftKey) {
-      // Middle mouse or right click or shift+left = pan
+    if (e.button === 1 || e.button === 2 || (e.shiftKey && !isDrawingMode)) {
+      // Pan mode
       setIsPanning(true);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       e.preventDefault();
-    } else if (isDrawingMode && imageRef.current && e.target === imageRef.current) {
-      // Start drawing new box
+    } else if (isDrawingMode && imageRef.current) {
       const rect = imageRef.current.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * 100;
-      const y = ((e.clientY - rect.top) / rect.height) * 100;
-      setDrawingBox({ x, y });
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      if (x >= 0 && x <= rect.width && y >= 0 && y <= rect.height) {
+        setDrawingBox({ x, y });
+        setSelectedBoxId(null);
+      }
     }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    // Update mouse position for status bar
+    if (imageRef.current) {
+      const rect = imageRef.current.getBoundingClientRect();
+      const x = Math.round((e.clientX - rect.left) / zoom);
+      const y = Math.round((e.clientY - rect.top) / zoom);
+      setMousePos({ x, y });
+    }
+
     if (isPanning) {
       setPan({
         x: e.clientX - panStart.x,
@@ -97,145 +116,84 @@ export function ImageAnnotationViewer({
       });
     } else if (isDragging && selectedBoxId && imageRef.current) {
       const rect = imageRef.current.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * 100;
-      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
 
       setBoxes((prev) =>
         prev.map((box) => {
           if (box.id === selectedBoxId) {
             return {
               ...box,
-              x: Math.max(0, Math.min(100 - box.width, x - dragStart.x)),
-              y: Math.max(0, Math.min(100 - box.height, y - dragStart.y)),
+              x: Math.max(0, Math.min(rect.width - box.width, x - dragStart.x)),
+              y: Math.max(0, Math.min(rect.height - box.height, y - dragStart.y)),
             };
           }
           return box;
         })
       );
+      setHasChanges(true);
     } else if (resizeHandle && selectedBoxId && imageRef.current) {
       const rect = imageRef.current.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * 100;
-      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
 
       setBoxes((prev) =>
         prev.map((box) => {
           if (box.id === selectedBoxId) {
+            const newBox = { ...box };
+            
             switch (resizeHandle) {
               case "top-left":
-                return {
-                  ...box,
-                  x: Math.max(0, Math.min(100 - box.width, x - resizeStart.x)),
-                  y: Math.max(0, Math.min(100 - box.height, y - resizeStart.y)),
-                  width: Math.max(
-                    0,
-                    Math.min(100, box.width + resizeStart.x - x)
-                  ),
-                  height: Math.max(
-                    0,
-                    Math.min(100, box.height + resizeStart.y - y)
-                  ),
-                };
+                const deltaX1 = x - resizeStart.x;
+                const deltaY1 = y - resizeStart.y;
+                newBox.x = Math.max(0, Math.min(box.x + box.width - 1, box.x + deltaX1));
+                newBox.y = Math.max(0, Math.min(box.y + box.height - 1, box.y + deltaY1));
+                newBox.width = Math.max(1, resizeStart.width - deltaX1);
+                newBox.height = Math.max(1, resizeStart.height - deltaY1);
+                break;
               case "top-right":
-                return {
-                  ...box,
-                  y: Math.max(0, Math.min(100 - box.height, y - resizeStart.y)),
-                  width: Math.max(
-                    0,
-                    Math.min(100, x - resizeStart.x + box.width)
-                  ),
-                  height: Math.max(
-                    0,
-                    Math.min(100, box.height + resizeStart.y - y)
-                  ),
-                };
+                const deltaY2 = y - resizeStart.y;
+                newBox.y = Math.max(0, Math.min(box.y + box.height - 1, box.y + deltaY2));
+                newBox.width = Math.max(1, Math.min(rect.width - box.x, x - box.x));
+                newBox.height = Math.max(1, resizeStart.height - deltaY2);
+                break;
               case "bottom-left":
-                return {
-                  ...box,
-                  x: Math.max(0, Math.min(100 - box.width, x - resizeStart.x)),
-                  width: Math.max(
-                    0,
-                    Math.min(100, box.width + resizeStart.x - x)
-                  ),
-                  height: Math.max(
-                    0,
-                    Math.min(100, y - resizeStart.y + box.height)
-                  ),
-                };
+                const deltaX3 = x - resizeStart.x;
+                newBox.x = Math.max(0, Math.min(box.x + box.width - 1, box.x + deltaX3));
+                newBox.width = Math.max(1, resizeStart.width - deltaX3);
+                newBox.height = Math.max(1, Math.min(rect.height - box.y, y - box.y));
+                break;
               case "bottom-right":
-                return {
-                  ...box,
-                  width: Math.max(
-                    0,
-                    Math.min(100, x - resizeStart.x + box.width)
-                  ),
-                  height: Math.max(
-                    0,
-                    Math.min(100, y - resizeStart.y + box.height)
-                  ),
-                };
-              case "top":
-                return {
-                  ...box,
-                  y: Math.max(0, Math.min(100 - box.height, y - resizeStart.y)),
-                  height: Math.max(
-                    0,
-                    Math.min(100, box.height + resizeStart.y - y)
-                  ),
-                };
-              case "right":
-                return {
-                  ...box,
-                  width: Math.max(
-                    0,
-                    Math.min(100, x - resizeStart.x + box.width)
-                  ),
-                };
-              case "bottom":
-                return {
-                  ...box,
-                  height: Math.max(
-                    0,
-                    Math.min(100, y - resizeStart.y + box.height)
-                  ),
-                };
-              case "left":
-                return {
-                  ...box,
-                  x: Math.max(0, Math.min(100 - box.width, x - resizeStart.x)),
-                  width: Math.max(
-                    0,
-                    Math.min(100, box.width + resizeStart.x - x)
-                  ),
-                };
-              default:
-                return box;
+                newBox.width = Math.max(1, Math.min(rect.width - box.x, x - box.x));
+                newBox.height = Math.max(1, Math.min(rect.height - box.y, y - box.y));
+                break;
             }
+            
+            return newBox;
           }
           return box;
         })
       );
-    } else if (isDrawingMode && imageRef.current) {
+      setHasChanges(true);
+    } else if (isDrawingMode && drawingBox && imageRef.current) {
       const rect = imageRef.current.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * 100;
-      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
 
-      if (drawingBox) {
-        const width = Math.abs(x - drawingBox.x);
-        const height = Math.abs(y - drawingBox.y);
-        const startX = Math.min(drawingBox.x, x);
-        const startY = Math.min(drawingBox.y, y);
+      const width = Math.abs(x - drawingBox.x);
+      const height = Math.abs(y - drawingBox.y);
+      const startX = Math.min(drawingBox.x, x);
+      const startY = Math.min(drawingBox.y, y);
 
-        setCurrentDrawingBox({
-          id: "new",
-          x: startX,
-          y: startY,
-          width,
-          height,
-          label: "Object",
-          confidence: 0.9,
-          isCorrect: undefined,
-        });
-      }
+      setCurrentDrawingBox({
+        id: "drawing",
+        x: startX,
+        y: startY,
+        width,
+        height,
+        label: "Object",
+        visible: true,
+      });
     }
   };
 
@@ -243,6 +201,7 @@ export function ImageAnnotationViewer({
     setIsPanning(false);
     setIsDragging(false);
     setResizeHandle(null);
+    
     if (isDrawingMode && currentDrawingBox && currentDrawingBox.width > 1 && currentDrawingBox.height > 1) {
       const newBox: BoundingBox = {
         ...currentDrawingBox,
@@ -252,6 +211,7 @@ export function ImageAnnotationViewer({
       setDrawingBox(null);
       setCurrentDrawingBox(null);
       setHasChanges(true);
+      setIsDrawingMode(false);
     } else if (isDrawingMode) {
       setDrawingBox(null);
       setCurrentDrawingBox(null);
@@ -260,14 +220,14 @@ export function ImageAnnotationViewer({
 
   const handleBoxMouseDown = (e: React.MouseEvent, boxId: string) => {
     e.stopPropagation();
-    if (!imageRef.current) return;
+    if (!imageRef.current || isDrawingMode) return;
 
     const rect = imageRef.current.getBoundingClientRect();
     const box = boxes.find((b) => b.id === boxId);
     if (!box) return;
 
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
     setSelectedBoxId(boxId);
     setIsDragging(true);
@@ -286,21 +246,12 @@ export function ImageAnnotationViewer({
     const box = boxes.find((b) => b.id === boxId);
     if (!box) return;
 
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
     setSelectedBoxId(boxId);
     setResizeHandle(handle);
-    setResizeStart({ x: x - box.x, y: y - box.y });
-  };
-
-  const markBoxAsCorrect = (boxId: string, isCorrect: boolean) => {
-    setBoxes((prev) =>
-      prev.map((box) =>
-        box.id === boxId ? { ...box, isCorrect } : box
-      )
-    );
-    setHasChanges(true);
+    setResizeStart({ x, y, width: box.width, height: box.height });
   };
 
   const deleteBox = (boxId: string) => {
@@ -309,6 +260,21 @@ export function ImageAnnotationViewer({
     if (selectedBoxId === boxId) {
       setSelectedBoxId(null);
     }
+  };
+
+  const toggleBoxVisibility = (boxId: string) => {
+    setBoxes((prev) =>
+      prev.map((box) =>
+        box.id === boxId ? { ...box, visible: !box.visible } : box
+      )
+    );
+  };
+
+  const updateBoxLabel = (boxId: string, label: string) => {
+    setBoxes((prev) =>
+      prev.map((box) => (box.id === boxId ? { ...box, label } : box))
+    );
+    setHasChanges(true);
   };
 
   const handleSave = () => {
@@ -323,11 +289,50 @@ export function ImageAnnotationViewer({
     setPan({ x: 0, y: 0 });
   };
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when editing label
+      if (editingLabelId) return;
+
+      // W - Create RectBox
+      if (e.key === 'w' || e.key === 'W') {
+        setIsDrawingMode((prev) => !prev);
+        setDrawingBox(null);
+        setCurrentDrawingBox(null);
+        e.preventDefault();
+      }
+      // Delete - Delete selected box
+      else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBoxId) {
+        deleteBox(selectedBoxId);
+        e.preventDefault();
+      }
+      // Ctrl+S - Save
+      else if (e.ctrlKey && e.key === 's') {
+        handleSave();
+        e.preventDefault();
+      }
+      // Escape - Cancel drawing or deselect
+      else if (e.key === 'Escape') {
+        setIsDrawingMode(false);
+        setDrawingBox(null);
+        setCurrentDrawingBox(null);
+        setSelectedBoxId(null);
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedBoxId, editingLabelId]);
+
   useEffect(() => {
     const handleContextMenu = (e: MouseEvent) => e.preventDefault();
     window.addEventListener("contextmenu", handleContextMenu);
     return () => window.removeEventListener("contextmenu", handleContextMenu);
   }, []);
+
+  const getBoxColor = (index: number) => BOX_COLORS[index % BOX_COLORS.length];
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center">
@@ -335,11 +340,9 @@ export function ImageAnnotationViewer({
         {/* Header */}
         <div className="bg-[#424F42] rounded-t-2xl p-4 flex items-center justify-between border border-[rgba(101,104,89,0.3)]">
           <div className="flex items-center gap-4">
-            <h3 className="text-white text-lg">Image Annotation Editor</h3>
+            <h3 className="text-white text-lg">Image Annotation - LabelImg Style</h3>
             <span className="text-[#E8F0A5] text-sm">
-              {boxes.filter((b) => b.isCorrect === true).length} correct ·{" "}
-              {boxes.filter((b) => b.isCorrect === false).length} incorrect ·{" "}
-              {boxes.filter((b) => b.isCorrect === undefined).length} pending
+              {boxes.length} box{boxes.length !== 1 ? "es" : ""}
             </span>
           </div>
           <button
@@ -365,10 +368,10 @@ export function ImageAnnotationViewer({
                   ? "bg-[#72C16B] text-white"
                   : "bg-[#656859] text-[#E8F0A5] hover:bg-[#72C16B]"
               }`}
-              title="Draw new box"
+              title="Create RectBox (W)"
             >
-              <Square className="w-4 h-4" />
-              <span className="text-sm">Draw Box</span>
+              <span className="text-sm font-semibold">W</span>
+              <span className="text-sm">Create RectBox</span>
             </button>
 
             <div className="h-6 w-px bg-[rgba(101,104,89,0.3)] mx-2" />
@@ -376,6 +379,7 @@ export function ImageAnnotationViewer({
             <button
               onClick={() => setZoom(Math.max(0.5, zoom - 0.2))}
               className="p-2 hover:bg-[#656859] rounded-xl transition-all duration-300"
+              title="Zoom Out"
             >
               <ZoomOut className="w-4 h-4 text-[#72C16B]" />
             </button>
@@ -385,398 +389,296 @@ export function ImageAnnotationViewer({
             <button
               onClick={() => setZoom(Math.min(5, zoom + 0.2))}
               className="p-2 hover:bg-[#656859] rounded-xl transition-all duration-300"
+              title="Zoom In"
             >
               <ZoomIn className="w-4 h-4 text-[#72C16B]" />
             </button>
 
-            <div className="h-6 w-px bg-[rgba(101,104,89,0.3)] mx-2" />
-
             <button
               onClick={handleReset}
-              className="p-2 hover:bg-[#656859] rounded-xl transition-all duration-300 flex items-center gap-2"
-              title="Reset view"
+              className="p-2 hover:bg-[#656859] rounded-xl transition-all duration-300"
+              title="Reset View"
             >
               <RotateCcw className="w-4 h-4 text-[#72C16B]" />
-              <span className="text-[#E8F0A5] text-sm">Reset</span>
             </button>
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="text-[#E8F0A5] text-sm flex items-center gap-2">
-              <Move className="w-4 h-4" />
-              <span>
-                {isDrawingMode
-                  ? "Click & drag to draw box"
-                  : "Shift+Drag to pan · Click box to select"}
-              </span>
+            <div className="text-[#E8F0A5] text-sm">
+              {isDrawingMode ? "🖱️ Click & drag to draw" : "📦 Click box to select · Shift+Drag to pan"}
             </div>
 
             {hasChanges && (
               <button
                 onClick={handleSave}
                 className="px-4 py-2 bg-gradient-to-r from-[#72C16B] to-[#7FE0EE] text-white rounded-xl hover:shadow-lg transition-all duration-300 flex items-center gap-2"
+                title="Save (Ctrl+S)"
               >
                 <Save className="w-4 h-4" />
-                Save Feedback
+                Save
               </button>
             )}
           </div>
         </div>
 
-        {/* Image Viewer */}
-        <div
-          ref={containerRef}
-          className="flex-1 bg-[#63786E] rounded-b-2xl overflow-hidden relative border border-t-0 border-[rgba(101,104,89,0.3)] cursor-move"
-          onWheel={handleWheel}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-        >
+        {/* Main Content */}
+        <div className="flex-1 flex gap-3 overflow-hidden">
+          {/* Image Viewer */}
           <div
-            className="absolute inset-0 flex items-center justify-center"
-            style={{
-              transform: `translate(${pan.x}px, ${pan.y}px)`,
-            }}
+            ref={containerRef}
+            className={`flex-1 bg-[#63786E] overflow-hidden relative border border-t-0 border-[rgba(101,104,89,0.3)] ${
+              isDrawingMode ? "cursor-crosshair" : "cursor-move"
+            }`}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
           >
-            <div className="relative inline-block">
-              <img
-                ref={imageRef}
-                src={imageUrl}
-                alt="Annotated"
-                className="max-w-none"
-                style={{
-                  transform: `scale(${zoom})`,
-                  transformOrigin: "center",
-                }}
-                draggable={false}
-              />
-
-              {/* Bounding Boxes */}
-              {boxes.map((box) => (
-                <div
-                  key={box.id}
-                  className={`absolute border-2 cursor-move transition-all ${
-                    selectedBoxId === box.id
-                      ? "border-[#7FE0EE] shadow-lg shadow-[#7FE0EE]/50"
-                      : box.isCorrect === true
-                        ? "border-green-500"
-                        : box.isCorrect === false
-                          ? "border-red-500"
-                          : "border-yellow-500"
-                  }`}
+            <div
+              className="absolute inset-0 flex items-center justify-center"
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px)`,
+              }}
+            >
+              <div className="relative inline-block">
+                <img
+                  ref={imageRef}
+                  src={imageUrl}
+                  alt="Annotated"
+                  className="max-w-none select-none"
                   style={{
-                    left: `${box.x}%`,
-                    top: `${box.y}%`,
-                    width: `${box.width}%`,
-                    height: `${box.height}%`,
                     transform: `scale(${zoom})`,
-                    transformOrigin: "top left",
+                    transformOrigin: "center",
                   }}
-                  onMouseDown={(e) => handleBoxMouseDown(e, box.id)}
-                >
-                  {/* Label */}
+                  draggable={false}
+                />
+
+                {/* Bounding Boxes */}
+                {boxes.filter(box => box.visible !== false).map((box, index) => (
                   <div
-                    className={`absolute -top-6 left-0 px-2 py-1 text-xs text-white rounded-md whitespace-nowrap ${
-                      box.isCorrect === true
-                        ? "bg-green-500"
-                        : box.isCorrect === false
-                          ? "bg-red-500"
-                          : "bg-yellow-500"
+                    key={box.id}
+                    className={`absolute border-2 transition-all ${
+                      selectedBoxId === box.id
+                        ? "border-[#7FE0EE] shadow-lg shadow-[#7FE0EE]/50"
+                        : ""
                     }`}
+                    style={{
+                      left: `${box.x}px`,
+                      top: `${box.y}px`,
+                      width: `${box.width}px`,
+                      height: `${box.height}px`,
+                      transform: `scale(${zoom})`,
+                      transformOrigin: "top left",
+                      borderColor: selectedBoxId === box.id ? "#7FE0EE" : getBoxColor(index),
+                      cursor: isDrawingMode ? "crosshair" : "move",
+                    }}
+                    onMouseDown={(e) => handleBoxMouseDown(e, box.id)}
                   >
-                    {box.label || "Object"}{" "}
-                    {box.confidence && `(${Math.round(box.confidence * 100)}%)`}
-                  </div>
-
-                  {/* Action Buttons */}
-                  {selectedBoxId === box.id && (
-                    <div className="absolute -bottom-10 left-0 flex gap-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          markBoxAsCorrect(box.id, true);
-                        }}
-                        className={`p-1.5 rounded-lg transition-all ${
-                          box.isCorrect === true
-                            ? "bg-green-500"
-                            : "bg-[#424F42] hover:bg-green-500"
-                        }`}
-                        title="Mark as correct"
-                      >
-                        <Check className="w-4 h-4 text-white" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          markBoxAsCorrect(box.id, false);
-                        }}
-                        className={`p-1.5 rounded-lg transition-all ${
-                          box.isCorrect === false
-                            ? "bg-red-500"
-                            : "bg-[#424F42] hover:bg-red-500"
-                        }`}
-                        title="Mark as incorrect"
-                      >
-                        <X className="w-4 h-4 text-white" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteBox(box.id);
-                        }}
-                        className="p-1.5 bg-[#424F42] hover:bg-red-600 rounded-lg transition-all"
-                        title="Delete box"
-                      >
-                        <X className="w-4 h-4 text-white" />
-                      </button>
+                    {/* Label inside box */}
+                    <div
+                      className="absolute top-1 left-1 px-2 py-1 text-xs text-white rounded shadow-lg pointer-events-none"
+                      style={{
+                        backgroundColor: getBoxColor(index),
+                        transform: `scale(${1 / zoom})`,
+                        transformOrigin: "top left",
+                      }}
+                    >
+                      {box.label || "Object"}
                     </div>
-                  )}
 
-                  {/* Resize Handles */}
-                  <div
-                    className="absolute top-0 left-0 cursor-nwse-resize"
-                    style={{ transform: "translate(-50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "top-left", box.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
+                    {/* Resize Handles - Only show for selected box */}
+                    {selectedBoxId === box.id && !isDrawingMode && (
+                      <>
+                        <div
+                          className="absolute w-3 h-3 bg-[#7FE0EE] border border-white cursor-nwse-resize"
+                          style={{
+                            left: "-6px",
+                            top: "-6px",
+                            transform: `scale(${1 / zoom})`,
+                            transformOrigin: "center",
+                          }}
+                          onMouseDown={(e) => handleResizeHandleMouseDown(e, "top-left", box.id)}
+                        />
+                        <div
+                          className="absolute w-3 h-3 bg-[#7FE0EE] border border-white cursor-nesw-resize"
+                          style={{
+                            right: "-6px",
+                            top: "-6px",
+                            transform: `scale(${1 / zoom})`,
+                            transformOrigin: "center",
+                          }}
+                          onMouseDown={(e) => handleResizeHandleMouseDown(e, "top-right", box.id)}
+                        />
+                        <div
+                          className="absolute w-3 h-3 bg-[#7FE0EE] border border-white cursor-nesw-resize"
+                          style={{
+                            left: "-6px",
+                            bottom: "-6px",
+                            transform: `scale(${1 / zoom})`,
+                            transformOrigin: "center",
+                          }}
+                          onMouseDown={(e) => handleResizeHandleMouseDown(e, "bottom-left", box.id)}
+                        />
+                        <div
+                          className="absolute w-3 h-3 bg-[#7FE0EE] border border-white cursor-nwse-resize"
+                          style={{
+                            right: "-6px",
+                            bottom: "-6px",
+                            transform: `scale(${1 / zoom})`,
+                            transformOrigin: "center",
+                          }}
+                          onMouseDown={(e) => handleResizeHandleMouseDown(e, "bottom-right", box.id)}
+                        />
+                      </>
+                    )}
                   </div>
+                ))}
+
+                {/* Drawing Box Preview */}
+                {isDrawingMode && currentDrawingBox && (
                   <div
-                    className="absolute top-0 right-0 cursor-nesw-resize"
-                    style={{ transform: "translate(50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "top-right", box.id)
-                    }
+                    className="absolute border-2 border-dashed border-[#7FE0EE]"
+                    style={{
+                      left: `${currentDrawingBox.x}px`,
+                      top: `${currentDrawingBox.y}px`,
+                      width: `${currentDrawingBox.width}px`,
+                      height: `${currentDrawingBox.height}px`,
+                      transform: `scale(${zoom})`,
+                      transformOrigin: "top left",
+                      pointerEvents: "none",
+                    }}
                   >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
+                    <div
+                      className="absolute top-1 left-1 px-2 py-1 text-xs text-white bg-[#7FE0EE] rounded shadow-lg"
+                      style={{
+                        transform: `scale(${1 / zoom})`,
+                        transformOrigin: "top left",
+                      }}
+                    >
+                      New Box
+                    </div>
                   </div>
-                  <div
-                    className="absolute bottom-0 left-0 cursor-nesw-resize"
-                    style={{ transform: "translate(-50%, 50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "bottom-left", box.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute bottom-0 right-0 cursor-nwse-resize"
-                    style={{ transform: "translate(50%, 50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "bottom-right", box.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute top-0 left-1/2 cursor-n-resize"
-                    style={{ transform: "translate(-50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "top", box.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute right-0 top-1/2 cursor-e-resize"
-                    style={{ transform: "translate(50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "right", box.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute bottom-0 left-1/2 cursor-s-resize"
-                    style={{ transform: "translate(-50%, 50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "bottom", box.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute left-0 top-1/2 cursor-w-resize"
-                    style={{ transform: "translate(-50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "left", box.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Right Sidebar - Box List */}
+          <div className="w-80 bg-[#424F42] overflow-y-auto border border-t-0 border-l-0 border-[rgba(101,104,89,0.3)] flex flex-col">
+            <div className="p-4 border-b border-[rgba(101,104,89,0.3)]">
+              <h4 className="text-white font-semibold mb-2">Box Labels</h4>
+              <p className="text-[#E8F0A5] text-xs">Click to select · Del to delete</p>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-2">
+              {boxes.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-[#E8F0A5] text-sm">No boxes yet</p>
+                  <p className="text-[#E8F0A5] text-xs mt-2">Press W to start drawing</p>
                 </div>
-              ))}
-
-              {/* Drawing Box */}
-              {isDrawingMode && currentDrawingBox && (
-                <div
-                  className="absolute border-2 cursor-move transition-all border-[#7FE0EE] shadow-lg shadow-[#7FE0EE]/50"
-                  style={{
-                    left: `${currentDrawingBox.x}%`,
-                    top: `${currentDrawingBox.y}%`,
-                    width: `${currentDrawingBox.width}%`,
-                    height: `${currentDrawingBox.height}%`,
-                    transform: `scale(${zoom})`,
-                    transformOrigin: "top left",
-                  }}
-                >
-                  {/* Label */}
-                  <div
-                    className={`absolute -top-6 left-0 px-2 py-1 text-xs text-white rounded-md whitespace-nowrap bg-yellow-500`}
-                  >
-                    {currentDrawingBox.label || "Object"}{" "}
-                    {currentDrawingBox.confidence &&
-                      `(${Math.round(currentDrawingBox.confidence * 100)}%)`}
-                  </div>
-
-                  {/* Action Buttons */}
-                  {selectedBoxId === currentDrawingBox.id && (
-                    <div className="absolute -bottom-10 left-0 flex gap-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          markBoxAsCorrect(currentDrawingBox.id, true);
-                        }}
-                        className={`p-1.5 rounded-lg transition-all ${
-                          currentDrawingBox.isCorrect === true
-                            ? "bg-green-500"
-                            : "bg-[#424F42] hover:bg-green-500"
-                        }`}
-                        title="Mark as correct"
-                      >
-                        <Check className="w-4 h-4 text-white" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          markBoxAsCorrect(currentDrawingBox.id, false);
-                        }}
-                        className={`p-1.5 rounded-lg transition-all ${
-                          currentDrawingBox.isCorrect === false
-                            ? "bg-red-500"
-                            : "bg-[#424F42] hover:bg-red-500"
-                        }`}
-                        title="Mark as incorrect"
-                      >
-                        <X className="w-4 h-4 text-white" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteBox(currentDrawingBox.id);
-                        }}
-                        className="p-1.5 bg-[#424F42] hover:bg-red-600 rounded-lg transition-all"
-                        title="Delete box"
-                      >
-                        <X className="w-4 h-4 text-white" />
-                      </button>
+              ) : (
+                <div className="space-y-2">
+                  {boxes.map((box, index) => (
+                    <div
+                      key={box.id}
+                      className={`rounded-xl p-3 transition-all cursor-pointer ${
+                        selectedBoxId === box.id
+                          ? "bg-[#656859] ring-2 ring-[#72C16B]"
+                          : "bg-[#63786E] hover:bg-[#656859]"
+                      }`}
+                      onClick={() => setSelectedBoxId(box.id)}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleBoxVisibility(box.id);
+                          }}
+                          className="p-1 hover:bg-[#424F42] rounded transition-all"
+                        >
+                          {box.visible !== false ? (
+                            <Eye className="w-4 h-4 text-[#72C16B]" />
+                          ) : (
+                            <EyeOff className="w-4 h-4 text-gray-500" />
+                          )}
+                        </button>
+                        
+                        <div
+                          className="w-4 h-4 rounded border border-white"
+                          style={{ backgroundColor: getBoxColor(index) }}
+                        />
+                        
+                        {editingLabelId === box.id ? (
+                          <input
+                            type="text"
+                            value={box.label || ""}
+                            onChange={(e) => updateBoxLabel(box.id, e.target.value)}
+                            onBlur={() => setEditingLabelId(null)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') setEditingLabelId(null);
+                            }}
+                            autoFocus
+                            className="flex-1 px-2 py-1 bg-[#424F42] text-white text-sm rounded border border-[#72C16B] focus:outline-none"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <span
+                            className="flex-1 text-white text-sm truncate"
+                            onDoubleClick={(e) => {
+                              e.stopPropagation();
+                              setEditingLabelId(box.id);
+                            }}
+                          >
+                            {box.label || "Object"}
+                          </span>
+                        )}
+                        
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteBox(box.id);
+                          }}
+                          className="p-1 hover:bg-red-500 rounded transition-all"
+                          title="Delete (Del)"
+                        >
+                          <Trash2 className="w-4 h-4 text-white" />
+                        </button>
+                      </div>
+                      
+                      <div className="text-[#E8F0A5] text-xs space-y-1 ml-7">
+                        <div>x: {box.x.toFixed(1)}px, y: {box.y.toFixed(1)}px</div>
+                        <div>w: {box.width.toFixed(1)}px, h: {box.height.toFixed(1)}px</div>
+                      </div>
                     </div>
-                  )}
-
-                  {/* Resize Handles */}
-                  <div
-                    className="absolute top-0 left-0 cursor-nwse-resize"
-                    style={{ transform: "translate(-50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "top-left", currentDrawingBox.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute top-0 right-0 cursor-nesw-resize"
-                    style={{ transform: "translate(50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "top-right", currentDrawingBox.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute bottom-0 left-0 cursor-nesw-resize"
-                    style={{ transform: "translate(-50%, 50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "bottom-left", currentDrawingBox.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute bottom-0 right-0 cursor-nwse-resize"
-                    style={{ transform: "translate(50%, 50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "bottom-right", currentDrawingBox.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute top-0 left-1/2 cursor-n-resize"
-                    style={{ transform: "translate(-50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "top", currentDrawingBox.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute right-0 top-1/2 cursor-e-resize"
-                    style={{ transform: "translate(50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "right", currentDrawingBox.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute bottom-0 left-1/2 cursor-s-resize"
-                    style={{ transform: "translate(-50%, 50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "bottom", currentDrawingBox.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
-                  <div
-                    className="absolute left-0 top-1/2 cursor-w-resize"
-                    style={{ transform: "translate(-50%, -50%)" }}
-                    onMouseDown={(e) =>
-                      handleResizeHandleMouseDown(e, "left", currentDrawingBox.id)
-                    }
-                  >
-                    <Square className="w-4 h-4 text-[#7FE0EE]" />
-                  </div>
+                  ))}
                 </div>
               )}
+            </div>
+
+            {/* Keyboard Shortcuts Help */}
+            <div className="p-3 border-t border-[rgba(101,104,89,0.3)] bg-[#63786E]">
+              <h5 className="text-white text-xs font-semibold mb-2">Shortcuts</h5>
+              <div className="text-[#E8F0A5] text-xs space-y-1">
+                <div><kbd className="bg-[#424F42] px-1 rounded">W</kbd> Create Box</div>
+                <div><kbd className="bg-[#424F42] px-1 rounded">Del</kbd> Delete</div>
+                <div><kbd className="bg-[#424F42] px-1 rounded">Ctrl+S</kbd> Save</div>
+                <div><kbd className="bg-[#424F42] px-1 rounded">Esc</kbd> Cancel</div>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Instructions */}
-        <div className="mt-2 bg-[#424F42] rounded-lg p-3 border border-[rgba(101,104,89,0.3)]">
-          <div className="flex items-center justify-between text-[#E8F0A5] text-sm">
-            <div className="flex gap-6">
-              <span>🖱️ Scroll to zoom</span>
-              <span>⌨️ Shift + Drag to pan</span>
-              <span>👆 Click box to select</span>
-              <span>✋ Drag box to move</span>
-            </div>
-            <div className="flex gap-4">
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-yellow-500" />
-                <span>Pending</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-green-500" />
-                <span>Correct</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-red-500" />
-                <span>Incorrect</span>
-              </div>
-            </div>
+        {/* Status Bar */}
+        <div className="bg-[#424F42] rounded-b-2xl p-2 border border-t-0 border-[rgba(101,104,89,0.3)] flex items-center justify-between text-[#E8F0A5] text-xs">
+          <div className="flex gap-6">
+            <span>X: {mousePos.x}, Y: {mousePos.y}</span>
+            <span>Zoom: {Math.round(zoom * 100)}%</span>
+            <span>Boxes: {boxes.length}</span>
+          </div>
+          <div>
+            {isDrawingMode && "Drawing mode active"}
+            {selectedBoxId && !isDrawingMode && `Selected: ${boxes.find(b => b.id === selectedBoxId)?.label || "Box"}`}
           </div>
         </div>
       </div>

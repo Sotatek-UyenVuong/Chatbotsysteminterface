@@ -10,20 +10,23 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 interface Point {
-  x: number; // percentage
-  y: number; // percentage
+  x: number; // pixels
+  y: number; // pixels
 }
 
 interface Area {
   id: string;
   type: "rectangle" | "circle" | "polygon";
   points: Point[];
-  area: number; // in pixels or units
+  area: number; // in pixels
   label?: string;
   color: string;
+  visible?: boolean;
 }
 
 interface AreaCalculatorProps {
@@ -31,6 +34,17 @@ interface AreaCalculatorProps {
   onSaveAreas?: (imageUrl: string, areas: Area[]) => void;
   onClose?: () => void;
 }
+
+const AREA_COLORS = [
+  "#72C16B",
+  "#7FE0EE",
+  "#E8F0A5",
+  "#FF6B6B",
+  "#4ECDC4",
+  "#95E1D3",
+  "#F38181",
+  "#AA96DA",
+];
 
 export function AreaCalculator({
   initialImageUrl,
@@ -51,19 +65,12 @@ export function AreaCalculator({
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  const colors = [
-    "#72C16B",
-    "#7FE0EE",
-    "#E8F0A5",
-    "#7A9150",
-    "#FF6B6B",
-    "#4ECDC4",
-  ];
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -77,56 +84,83 @@ export function AreaCalculator({
     }
   };
 
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!drawingTool || !imageRef.current || isPanning) return;
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.shiftKey || e.button === 1 || e.button === 2) {
+      // Pan mode
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+      e.preventDefault();
+    } else if (drawingTool && imageRef.current) {
+      const rect = imageRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
 
-    const rect = imageRef.current.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
+      if (x >= 0 && x <= rect.width && y >= 0 && y <= rect.height) {
+        const point: Point = { x, y };
 
-    const point: Point = { x, y };
-
-    if (drawingTool === "rectangle") {
-      if (currentPoints.length === 0) {
-        setCurrentPoints([point]);
-        setIsDrawing(true);
-      } else {
-        const area = calculateRectangleArea(currentPoints[0], point);
-        addArea("rectangle", [currentPoints[0], point], area);
-        setCurrentPoints([]);
-        setIsDrawing(false);
+        if (drawingTool === "rectangle") {
+          if (!isDrawing) {
+            setCurrentPoints([point]);
+            setIsDrawing(true);
+          }
+        } else if (drawingTool === "circle") {
+          if (!isDrawing) {
+            setCurrentPoints([point]);
+            setIsDrawing(true);
+          }
+        } else if (drawingTool === "polygon") {
+          setCurrentPoints((prev) => [...prev, point]);
+          setIsDrawing(true);
+        }
       }
-    } else if (drawingTool === "circle") {
-      if (currentPoints.length === 0) {
-        setCurrentPoints([point]);
-        setIsDrawing(true);
-      } else {
-        const area = calculateCircleArea(currentPoints[0], point);
-        addArea("circle", [currentPoints[0], point], area);
-        setCurrentPoints([]);
-        setIsDrawing(false);
-      }
-    } else if (drawingTool === "polygon") {
-      setCurrentPoints((prev) => [...prev, point]);
-      setIsDrawing(true);
     }
   };
 
-  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!imageRef.current) return;
-
-    const rect = imageRef.current.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
+  const handleMouseMove = (e: React.MouseEvent) => {
+    // Update mouse position
+    if (imageRef.current) {
+      const rect = imageRef.current.getBoundingClientRect();
+      const x = Math.round((e.clientX - rect.left) / zoom);
+      const y = Math.round((e.clientY - rect.top) / zoom);
+      setMousePos({ x, y });
+    }
 
     if (isPanning) {
       setPan({
         x: e.clientX - panStart.x,
         y: e.clientY - panStart.y,
       });
-    } else if (isDrawing && currentPoints.length > 0 && canvasRef.current) {
-      // Draw preview
-      drawPreview({ x, y });
+    }
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    setIsPanning(false);
+
+    if (isDrawing && imageRef.current) {
+      const rect = imageRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      if (drawingTool === "rectangle" && currentPoints.length === 1) {
+        const point: Point = { x, y };
+        const area = calculateRectangleArea(currentPoints[0], point);
+        if (area > 10) {
+          // Minimum area threshold
+          addArea("rectangle", [currentPoints[0], point], area);
+        }
+        setCurrentPoints([]);
+        setIsDrawing(false);
+        setDrawingTool(null);
+      } else if (drawingTool === "circle" && currentPoints.length === 1) {
+        const point: Point = { x, y };
+        const area = calculateCircleArea(currentPoints[0], point);
+        if (area > 10) {
+          addArea("circle", [currentPoints[0], point], area);
+        }
+        setCurrentPoints([]);
+        setIsDrawing(false);
+        setDrawingTool(null);
+      }
     }
   };
 
@@ -137,6 +171,7 @@ export function AreaCalculator({
     }
     setCurrentPoints([]);
     setIsDrawing(false);
+    setDrawingTool(null);
   };
 
   const addArea = (
@@ -149,7 +184,9 @@ export function AreaCalculator({
       type,
       points,
       area,
-      color: colors[areas.length % colors.length],
+      label: `${type.charAt(0).toUpperCase() + type.slice(1)} ${areas.length + 1}`,
+      color: AREA_COLORS[areas.length % AREA_COLORS.length],
+      visible: true,
     };
     setAreas((prev) => [...prev, newArea]);
   };
@@ -161,175 +198,45 @@ export function AreaCalculator({
     }
   };
 
+  const toggleAreaVisibility = (areaId: string) => {
+    setAreas((prev) =>
+      prev.map((area) =>
+        area.id === areaId ? { ...area, visible: !area.visible } : area
+      )
+    );
+  };
+
+  const updateAreaLabel = (areaId: string, label: string) => {
+    setAreas((prev) =>
+      prev.map((area) => (area.id === areaId ? { ...area, label } : area))
+    );
+  };
+
   const calculateRectangleArea = (p1: Point, p2: Point): number => {
-    if (!imageRef.current) return 0;
     const width = Math.abs(p2.x - p1.x);
     const height = Math.abs(p2.y - p1.y);
-    const imgWidth = imageRef.current.naturalWidth;
-    const imgHeight = imageRef.current.naturalHeight;
-    return ((width / 100) * imgWidth * (height / 100) * imgHeight);
+    return width * height;
   };
 
   const calculateCircleArea = (center: Point, edge: Point): number => {
-    if (!imageRef.current) return 0;
     const dx = edge.x - center.x;
     const dy = edge.y - center.y;
     const radius = Math.sqrt(dx * dx + dy * dy);
-    const imgWidth = imageRef.current.naturalWidth;
-    const avgDimension = (imgWidth + imageRef.current.naturalHeight) / 2;
-    const radiusPixels = (radius / 100) * avgDimension;
-    return Math.PI * radiusPixels * radiusPixels;
+    return Math.PI * radius * radius;
   };
 
   const calculatePolygonArea = (points: Point[]): number => {
-    if (!imageRef.current || points.length < 3) return 0;
-    const imgWidth = imageRef.current.naturalWidth;
-    const imgHeight = imageRef.current.naturalHeight;
-
-    // Convert to pixel coordinates
-    const pixelPoints = points.map((p) => ({
-      x: (p.x / 100) * imgWidth,
-      y: (p.y / 100) * imgHeight,
-    }));
+    if (points.length < 3) return 0;
 
     // Shoelace formula
     let area = 0;
-    for (let i = 0; i < pixelPoints.length; i++) {
-      const j = (i + 1) % pixelPoints.length;
-      area += pixelPoints[i].x * pixelPoints[j].y;
-      area -= pixelPoints[j].x * pixelPoints[i].y;
+    for (let i = 0; i < points.length; i++) {
+      const j = (i + 1) % points.length;
+      area += points[i].x * points[j].y;
+      area -= points[j].x * points[i].y;
     }
     return Math.abs(area / 2);
   };
-
-  const drawPreview = (currentMouse: Point) => {
-    if (!canvasRef.current || !imageRef.current) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Convert percentage to canvas pixels
-    const toCanvasCoords = (p: Point) => ({
-      x: (p.x / 100) * canvas.width,
-      y: (p.y / 100) * canvas.height,
-    });
-
-    ctx.strokeStyle = "#7FE0EE";
-    ctx.lineWidth = 2;
-    ctx.fillStyle = "rgba(127, 224, 238, 0.2)";
-
-    if (drawingTool === "rectangle" && currentPoints.length === 1) {
-      const start = toCanvasCoords(currentPoints[0]);
-      const end = toCanvasCoords(currentMouse);
-      ctx.fillRect(
-        start.x,
-        start.y,
-        end.x - start.x,
-        end.y - start.y
-      );
-      ctx.strokeRect(
-        start.x,
-        start.y,
-        end.x - start.x,
-        end.y - start.y
-      );
-    } else if (drawingTool === "circle" && currentPoints.length === 1) {
-      const center = toCanvasCoords(currentPoints[0]);
-      const edge = toCanvasCoords(currentMouse);
-      const radius = Math.sqrt(
-        Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-      );
-      ctx.beginPath();
-      ctx.arc(center.x, center.y, radius, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
-    } else if (drawingTool === "polygon" && currentPoints.length > 0) {
-      ctx.beginPath();
-      const first = toCanvasCoords(currentPoints[0]);
-      ctx.moveTo(first.x, first.y);
-      currentPoints.slice(1).forEach((p) => {
-        const coords = toCanvasCoords(p);
-        ctx.lineTo(coords.x, coords.y);
-      });
-      const current = toCanvasCoords(currentMouse);
-      ctx.lineTo(current.x, current.y);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-
-      // Draw points
-      currentPoints.forEach((p) => {
-        const coords = toCanvasCoords(p);
-        ctx.beginPath();
-        ctx.arc(coords.x, coords.y, 5, 0, 2 * Math.PI);
-        ctx.fillStyle = "#7FE0EE";
-        ctx.fill();
-      });
-    }
-  };
-
-  const drawAreas = () => {
-    if (!canvasRef.current || !imageRef.current) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const toCanvasCoords = (p: Point) => ({
-      x: (p.x / 100) * canvas.width,
-      y: (p.y / 100) * canvas.height,
-    });
-
-    areas.forEach((area) => {
-      ctx.strokeStyle = area.color;
-      ctx.lineWidth = selectedAreaId === area.id ? 3 : 2;
-      ctx.fillStyle = `${area.color}40`;
-
-      if (area.type === "rectangle" && area.points.length === 2) {
-        const start = toCanvasCoords(area.points[0]);
-        const end = toCanvasCoords(area.points[1]);
-        ctx.fillRect(start.x, start.y, end.x - start.x, end.y - start.y);
-        ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
-      } else if (area.type === "circle" && area.points.length === 2) {
-        const center = toCanvasCoords(area.points[0]);
-        const edge = toCanvasCoords(area.points[1]);
-        const radius = Math.sqrt(
-          Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-        );
-        ctx.beginPath();
-        ctx.arc(center.x, center.y, radius, 0, 2 * Math.PI);
-        ctx.fill();
-        ctx.stroke();
-      } else if (area.type === "polygon" && area.points.length >= 3) {
-        ctx.beginPath();
-        const first = toCanvasCoords(area.points[0]);
-        ctx.moveTo(first.x, first.y);
-        area.points.slice(1).forEach((p) => {
-          const coords = toCanvasCoords(p);
-          ctx.lineTo(coords.x, coords.y);
-        });
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-      }
-    });
-  };
-
-  useEffect(() => {
-    if (imageRef.current && canvasRef.current) {
-      const img = imageRef.current;
-      const canvas = canvasRef.current;
-      canvas.width = img.offsetWidth;
-      canvas.height = img.offsetHeight;
-      drawAreas();
-    }
-  }, [areas, selectedAreaId, zoom]);
 
   const handleSave = () => {
     if (onSaveAreas && imageUrl) {
@@ -337,16 +244,62 @@ export function AreaCalculator({
     }
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.shiftKey) {
-      setIsPanning(true);
-      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-    }
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY * -0.001;
+    const newZoom = Math.min(Math.max(zoom + delta, 0.5), 5);
+    setZoom(newZoom);
   };
 
-  const handleMouseUp = () => {
-    setIsPanning(false);
+  const handleReset = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
   };
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when editing label
+      if (editingLabelId) return;
+
+      if (e.key === "r" || e.key === "R") {
+        setDrawingTool(drawingTool === "rectangle" ? null : "rectangle");
+        e.preventDefault();
+      } else if (e.key === "c" || e.key === "C") {
+        setDrawingTool(drawingTool === "circle" ? null : "circle");
+        e.preventDefault();
+      } else if (e.key === "p" || e.key === "P") {
+        setDrawingTool(drawingTool === "polygon" ? null : "polygon");
+        e.preventDefault();
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedAreaId) {
+        deleteArea(selectedAreaId);
+        e.preventDefault();
+      } else if (e.ctrlKey && e.key === "s") {
+        handleSave();
+        e.preventDefault();
+      } else if (e.key === "Escape") {
+        setDrawingTool(null);
+        setCurrentPoints([]);
+        setIsDrawing(false);
+        setSelectedAreaId(null);
+        e.preventDefault();
+      } else if (e.key === "Enter" && drawingTool === "polygon" && currentPoints.length >= 3) {
+        finishPolygon();
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [drawingTool, selectedAreaId, currentPoints, editingLabelId]);
+
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => e.preventDefault();
+    window.addEventListener("contextmenu", handleContextMenu);
+    return () => window.removeEventListener("contextmenu", handleContextMenu);
+  }, []);
+
+  const getAreaColor = (index: number) => AREA_COLORS[index % AREA_COLORS.length];
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center">
@@ -354,12 +307,10 @@ export function AreaCalculator({
         {/* Header */}
         <div className="bg-[#424F42] rounded-t-2xl p-4 flex items-center justify-between border border-[rgba(101,104,89,0.3)]">
           <div className="flex items-center gap-4">
-            <h3 className="text-white text-lg">Area Calculator</h3>
-            {areas.length > 0 && (
-              <span className="text-[#E8F0A5] text-sm">
-                {areas.length} area{areas.length > 1 ? "s" : ""} measured
-              </span>
-            )}
+            <h3 className="text-white text-lg">Area Calculator - LabelImg Style</h3>
+            <span className="text-[#E8F0A5] text-sm">
+              {areas.length} area{areas.length !== 1 ? "s" : ""}
+            </span>
           </div>
           <button
             onClick={onClose}
@@ -372,7 +323,7 @@ export function AreaCalculator({
         {/* Toolbar */}
         <div className="bg-[#424F42] p-3 flex items-center justify-between border-x border-[rgba(101,104,89,0.3)]">
           <div className="flex items-center gap-2">
-            {!imageUrl && (
+            {!imageUrl ? (
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="px-4 py-2 bg-gradient-to-r from-[#72C16B] to-[#7FE0EE] text-white rounded-xl hover:shadow-lg transition-all duration-300 flex items-center gap-2"
@@ -380,43 +331,56 @@ export function AreaCalculator({
                 <Upload className="w-4 h-4" />
                 Upload Image
               </button>
-            )}
-
-            {imageUrl && (
+            ) : (
               <>
                 <button
-                  onClick={() => setDrawingTool(drawingTool === "rectangle" ? null : "rectangle")}
-                  className={`p-2 rounded-xl transition-all duration-300 flex items-center gap-2 ${
+                  onClick={() => {
+                    setDrawingTool(drawingTool === "rectangle" ? null : "rectangle");
+                    setCurrentPoints([]);
+                    setIsDrawing(false);
+                  }}
+                  className={`px-3 py-2 rounded-xl transition-all duration-300 flex items-center gap-2 ${
                     drawingTool === "rectangle"
                       ? "bg-[#72C16B] text-white"
                       : "bg-[#656859] text-[#E8F0A5] hover:bg-[#72C16B]"
                   }`}
-                  title="Rectangle"
+                  title="Rectangle (R)"
                 >
+                  <span className="text-sm font-semibold">R</span>
                   <Square className="w-4 h-4" />
                 </button>
 
                 <button
-                  onClick={() => setDrawingTool(drawingTool === "circle" ? null : "circle")}
-                  className={`p-2 rounded-xl transition-all duration-300 flex items-center gap-2 ${
+                  onClick={() => {
+                    setDrawingTool(drawingTool === "circle" ? null : "circle");
+                    setCurrentPoints([]);
+                    setIsDrawing(false);
+                  }}
+                  className={`px-3 py-2 rounded-xl transition-all duration-300 flex items-center gap-2 ${
                     drawingTool === "circle"
                       ? "bg-[#72C16B] text-white"
                       : "bg-[#656859] text-[#E8F0A5] hover:bg-[#72C16B]"
                   }`}
-                  title="Circle"
+                  title="Circle (C)"
                 >
+                  <span className="text-sm font-semibold">C</span>
                   <Circle className="w-4 h-4" />
                 </button>
 
                 <button
-                  onClick={() => setDrawingTool(drawingTool === "polygon" ? null : "polygon")}
-                  className={`p-2 rounded-xl transition-all duration-300 flex items-center gap-2 ${
+                  onClick={() => {
+                    setDrawingTool(drawingTool === "polygon" ? null : "polygon");
+                    setCurrentPoints([]);
+                    setIsDrawing(false);
+                  }}
+                  className={`px-3 py-2 rounded-xl transition-all duration-300 flex items-center gap-2 ${
                     drawingTool === "polygon"
                       ? "bg-[#72C16B] text-white"
                       : "bg-[#656859] text-[#E8F0A5] hover:bg-[#72C16B]"
                   }`}
-                  title="Polygon"
+                  title="Polygon (P)"
                 >
+                  <span className="text-sm font-semibold">P</span>
                   <Pen className="w-4 h-4" />
                 </button>
 
@@ -425,7 +389,7 @@ export function AreaCalculator({
                     onClick={finishPolygon}
                     className="px-3 py-2 bg-[#72C16B] text-white rounded-xl hover:shadow-lg transition-all duration-300 text-sm"
                   >
-                    Finish Polygon
+                    Finish (Enter)
                   </button>
                 )}
 
@@ -448,12 +412,8 @@ export function AreaCalculator({
                 </button>
 
                 <button
-                  onClick={() => {
-                    setZoom(1);
-                    setPan({ x: 0, y: 0 });
-                  }}
+                  onClick={handleReset}
                   className="p-2 hover:bg-[#656859] rounded-xl transition-all duration-300"
-                  title="Reset view"
                 >
                   <RotateCcw className="w-4 h-4 text-[#72C16B]" />
                 </button>
@@ -465,9 +425,10 @@ export function AreaCalculator({
             <button
               onClick={handleSave}
               className="px-4 py-2 bg-gradient-to-r from-[#72C16B] to-[#7FE0EE] text-white rounded-xl hover:shadow-lg transition-all duration-300 flex items-center gap-2"
+              title="Save (Ctrl+S)"
             >
               <Save className="w-4 h-4" />
-              Save Areas
+              Save
             </button>
           )}
         </div>
@@ -475,7 +436,17 @@ export function AreaCalculator({
         {/* Main Content */}
         <div className="flex-1 flex gap-3 overflow-hidden">
           {/* Image Viewer */}
-          <div className="flex-1 bg-[#63786E] rounded-bl-2xl overflow-hidden relative border border-t-0 border-[rgba(101,104,89,0.3)]">
+          <div
+            ref={containerRef}
+            className={`flex-1 bg-[#63786E] overflow-hidden relative border border-t-0 border-[rgba(101,104,89,0.3)] ${
+              drawingTool ? "cursor-crosshair" : "cursor-move"
+            }`}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={() => setIsPanning(false)}
+          >
             {!imageUrl ? (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center">
@@ -493,118 +464,308 @@ export function AreaCalculator({
               </div>
             ) : (
               <div
-                className="absolute inset-0 flex items-center justify-center overflow-hidden"
+                className="absolute inset-0 flex items-center justify-center"
                 style={{
                   transform: `translate(${pan.x}px, ${pan.y}px)`,
-                  cursor: drawingTool
-                    ? "crosshair"
-                    : isPanning
-                      ? "grabbing"
-                      : "grab",
                 }}
-                onMouseDown={handleMouseDown}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
               >
                 <div className="relative inline-block">
                   <img
                     ref={imageRef}
                     src={imageUrl}
                     alt="Measurement"
-                    className="max-w-none"
+                    className="max-w-none select-none"
                     style={{
                       transform: `scale(${zoom})`,
                       transformOrigin: "center",
                     }}
                     draggable={false}
-                    onLoad={drawAreas}
                   />
-                  <canvas
-                    ref={canvasRef}
-                    className="absolute top-0 left-0 pointer-events-none"
-                    style={{
-                      transform: `scale(${zoom})`,
-                      transformOrigin: "top left",
-                    }}
-                    onClick={handleCanvasClick}
-                    onMouseMove={handleCanvasMouseMove}
-                  />
+
+                  {/* Render Areas */}
+                  {areas.filter(area => area.visible !== false).map((area, index) => {
+                    if (area.type === "rectangle" && area.points.length === 2) {
+                      const p1 = area.points[0];
+                      const p2 = area.points[1];
+                      const x = Math.min(p1.x, p2.x);
+                      const y = Math.min(p1.y, p2.y);
+                      const width = Math.abs(p2.x - p1.x);
+                      const height = Math.abs(p2.y - p1.y);
+
+                      return (
+                        <div
+                          key={area.id}
+                          className={`absolute border-2 transition-all cursor-pointer ${
+                            selectedAreaId === area.id ? "shadow-lg" : ""
+                          }`}
+                          style={{
+                            left: `${x}px`,
+                            top: `${y}px`,
+                            width: `${width}px`,
+                            height: `${height}px`,
+                            borderColor: area.color,
+                            backgroundColor: `${area.color}20`,
+                            transform: `scale(${zoom})`,
+                            transformOrigin: "top left",
+                          }}
+                          onClick={() => setSelectedAreaId(area.id)}
+                        >
+                          <div
+                            className="absolute top-1 left-1 px-2 py-1 text-xs text-white rounded shadow-lg pointer-events-none"
+                            style={{
+                              backgroundColor: area.color,
+                              transform: `scale(${1 / zoom})`,
+                              transformOrigin: "top left",
+                            }}
+                          >
+                            {area.label}
+                          </div>
+                        </div>
+                      );
+                    } else if (area.type === "circle" && area.points.length === 2) {
+                      const center = area.points[0];
+                      const edge = area.points[1];
+                      const radius = Math.sqrt(
+                        Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
+                      );
+
+                      return (
+                        <div
+                          key={area.id}
+                          className="absolute rounded-full border-2 transition-all cursor-pointer"
+                          style={{
+                            left: `${center.x - radius}px`,
+                            top: `${center.y - radius}px`,
+                            width: `${radius * 2}px`,
+                            height: `${radius * 2}px`,
+                            borderColor: area.color,
+                            backgroundColor: `${area.color}20`,
+                            transform: `scale(${zoom})`,
+                            transformOrigin: "top left",
+                          }}
+                          onClick={() => setSelectedAreaId(area.id)}
+                        >
+                          <div
+                            className="absolute top-1 left-1 px-2 py-1 text-xs text-white rounded shadow-lg pointer-events-none"
+                            style={{
+                              backgroundColor: area.color,
+                              transform: `scale(${1 / zoom})`,
+                              transformOrigin: "top left",
+                            }}
+                          >
+                            {area.label}
+                          </div>
+                        </div>
+                      );
+                    } else if (area.type === "polygon" && area.points.length >= 3) {
+                      const points = area.points.map((p) => `${p.x},${p.y}`).join(" ");
+                      
+                      return (
+                        <svg
+                          key={area.id}
+                          className="absolute top-0 left-0 pointer-events-none"
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            transform: `scale(${zoom})`,
+                            transformOrigin: "top left",
+                          }}
+                        >
+                          <polygon
+                            points={points}
+                            fill={`${area.color}20`}
+                            stroke={area.color}
+                            strokeWidth="2"
+                            className="pointer-events-auto cursor-pointer"
+                            onClick={() => setSelectedAreaId(area.id)}
+                          />
+                          <text
+                            x={area.points[0].x}
+                            y={area.points[0].y - 5}
+                            fill="white"
+                            fontSize="12"
+                            style={{
+                              transform: `scale(${1 / zoom})`,
+                              transformOrigin: `${area.points[0].x}px ${area.points[0].y}px`,
+                            }}
+                          >
+                            <tspan
+                              x={area.points[0].x}
+                              dy="0"
+                              style={{
+                                fill: area.color,
+                                fontWeight: "bold",
+                              }}
+                            >
+                              {area.label}
+                            </tspan>
+                          </text>
+                        </svg>
+                      );
+                    }
+                    return null;
+                  })}
+
+                  {/* Drawing Preview */}
+                  {isDrawing && currentPoints.length > 0 && (
+                    <>
+                      {drawingTool === "rectangle" && currentPoints.length === 1 && (
+                        <div className="absolute border-2 border-dashed border-[#7FE0EE] pointer-events-none" />
+                      )}
+                      {drawingTool === "circle" && currentPoints.length === 1 && (
+                        <div className="absolute rounded-full border-2 border-dashed border-[#7FE0EE] pointer-events-none" />
+                      )}
+                      {drawingTool === "polygon" && (
+                        <>
+                          {currentPoints.map((point, idx) => (
+                            <div
+                              key={idx}
+                              className="absolute w-2 h-2 bg-[#7FE0EE] rounded-full"
+                              style={{
+                                left: `${point.x - 4}px`,
+                                top: `${point.y - 4}px`,
+                                transform: `scale(${zoom})`,
+                                transformOrigin: "center",
+                              }}
+                            />
+                          ))}
+                        </>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             )}
           </div>
 
-          {/* Areas List */}
-          {imageUrl && areas.length > 0 && (
-            <div className="w-80 bg-[#424F42] rounded-br-2xl border border-t-0 border-l-0 border-[rgba(101,104,89,0.3)] overflow-y-auto p-4">
-              <h4 className="text-white mb-3">Measured Areas</h4>
-              <div className="space-y-2">
-                {areas.map((area, index) => (
-                  <div
-                    key={area.id}
-                    className={`bg-[#656859] rounded-xl p-3 cursor-pointer transition-all ${
-                      selectedAreaId === area.id
-                        ? "ring-2 ring-[#72C16B]"
-                        : ""
-                    }`}
-                    onClick={() => setSelectedAreaId(area.id)}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <div
-                            className="w-4 h-4 rounded"
-                            style={{ backgroundColor: area.color }}
-                          />
-                          <span className="text-white text-sm">
-                            Area {index + 1} ({area.type})
-                          </span>
-                        </div>
-                        <p className="text-[#E8F0A5] text-sm">
-                          {Math.round(area.area).toLocaleString()} px²
-                        </p>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteArea(area.id);
-                        }}
-                        className="p-1 hover:bg-red-500 rounded-lg transition-all"
-                      >
-                        <Trash2 className="w-4 h-4 text-white" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+          {/* Right Sidebar - Area List */}
+          {imageUrl && (
+            <div className="w-80 bg-[#424F42] overflow-y-auto border border-t-0 border-l-0 border-[rgba(101,104,89,0.3)] flex flex-col">
+              <div className="p-4 border-b border-[rgba(101,104,89,0.3)]">
+                <h4 className="text-white font-semibold mb-2">Measured Areas</h4>
+                <p className="text-[#E8F0A5] text-xs">Click to select · Del to delete</p>
               </div>
 
-              <div className="mt-4 pt-4 border-t border-[rgba(101,104,89,0.3)]">
-                <div className="text-[#E8F0A5] text-sm">
-                  <p className="mb-1">
-                    <strong className="text-white">Total Area:</strong>{" "}
-                    {Math.round(
-                      areas.reduce((sum, a) => sum + a.area, 0)
-                    ).toLocaleString()}{" "}
-                    px²
-                  </p>
+              <div className="flex-1 overflow-y-auto p-2">
+                {areas.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-[#E8F0A5] text-sm">No areas yet</p>
+                    <p className="text-[#E8F0A5] text-xs mt-2">Press R, C, or P to start</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {areas.map((area, index) => (
+                      <div
+                        key={area.id}
+                        className={`rounded-xl p-3 transition-all cursor-pointer ${
+                          selectedAreaId === area.id
+                            ? "bg-[#656859] ring-2 ring-[#72C16B]"
+                            : "bg-[#63786E] hover:bg-[#656859]"
+                        }`}
+                        onClick={() => setSelectedAreaId(area.id)}
+                      >
+                        <div className="flex items-center gap-2 mb-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleAreaVisibility(area.id);
+                            }}
+                            className="p-1 hover:bg-[#424F42] rounded transition-all"
+                          >
+                            {area.visible !== false ? (
+                              <Eye className="w-4 h-4 text-[#72C16B]" />
+                            ) : (
+                              <EyeOff className="w-4 h-4 text-gray-500" />
+                            )}
+                          </button>
+
+                          <div
+                            className="w-4 h-4 rounded border border-white"
+                            style={{ backgroundColor: area.color }}
+                          />
+
+                          {editingLabelId === area.id ? (
+                            <input
+                              type="text"
+                              value={area.label || ""}
+                              onChange={(e) => updateAreaLabel(area.id, e.target.value)}
+                              onBlur={() => setEditingLabelId(null)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") setEditingLabelId(null);
+                              }}
+                              autoFocus
+                              className="flex-1 px-2 py-1 bg-[#424F42] text-white text-sm rounded border border-[#72C16B] focus:outline-none"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <span
+                              className="flex-1 text-white text-sm truncate"
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                setEditingLabelId(area.id);
+                              }}
+                            >
+                              {area.label}
+                            </span>
+                          )}
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteArea(area.id);
+                            }}
+                            className="p-1 hover:bg-red-500 rounded transition-all"
+                            title="Delete (Del)"
+                          >
+                            <Trash2 className="w-4 h-4 text-white" />
+                          </button>
+                        </div>
+
+                        <div className="text-[#E8F0A5] text-xs space-y-1 ml-7">
+                          <div>Type: {area.type}</div>
+                          <div>Area: {Math.round(area.area).toLocaleString()} px²</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {areas.length > 0 && (
+                <div className="p-3 border-t border-[rgba(101,104,89,0.3)] bg-[#63786E]">
+                  <div className="text-white text-sm font-semibold">
+                    Total: {Math.round(areas.reduce((sum, a) => sum + a.area, 0)).toLocaleString()} px²
+                  </div>
+                </div>
+              )}
+
+              {/* Keyboard Shortcuts Help */}
+              <div className="p-3 border-t border-[rgba(101,104,89,0.3)] bg-[#63786E]">
+                <h5 className="text-white text-xs font-semibold mb-2">Shortcuts</h5>
+                <div className="text-[#E8F0A5] text-xs space-y-1">
+                  <div><kbd className="bg-[#424F42] px-1 rounded">R</kbd> Rectangle</div>
+                  <div><kbd className="bg-[#424F42] px-1 rounded">C</kbd> Circle</div>
+                  <div><kbd className="bg-[#424F42] px-1 rounded">P</kbd> Polygon</div>
+                  <div><kbd className="bg-[#424F42] px-1 rounded">Enter</kbd> Finish Polygon</div>
+                  <div><kbd className="bg-[#424F42] px-1 rounded">Del</kbd> Delete</div>
+                  <div><kbd className="bg-[#424F42] px-1 rounded">Esc</kbd> Cancel</div>
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* Instructions */}
+        {/* Status Bar */}
         {imageUrl && (
-          <div className="mt-2 bg-[#424F42] rounded-lg p-3 border border-[rgba(101,104,89,0.3)]">
-            <div className="text-[#E8F0A5] text-sm flex gap-6">
-              <span>🖱️ Scroll to zoom</span>
-              <span>⌨️ Shift + Drag to pan</span>
-              {drawingTool === "polygon" && (
-                <span>👆 Click to add points, then "Finish Polygon"</span>
-              )}
-              {(drawingTool === "rectangle" || drawingTool === "circle") && (
-                <span>👆 Click start point, then click end point</span>
-              )}
+          <div className="bg-[#424F42] rounded-b-2xl p-2 border border-t-0 border-[rgba(101,104,89,0.3)] flex items-center justify-between text-[#E8F0A5] text-xs">
+            <div className="flex gap-6">
+              <span>X: {mousePos.x}, Y: {mousePos.y}</span>
+              <span>Zoom: {Math.round(zoom * 100)}%</span>
+              <span>Areas: {areas.length}</span>
+            </div>
+            <div>
+              {drawingTool && `Drawing ${drawingTool}...`}
+              {selectedAreaId && !drawingTool && `Selected: ${areas.find(a => a.id === selectedAreaId)?.label || "Area"}`}
             </div>
           </div>
         )}
