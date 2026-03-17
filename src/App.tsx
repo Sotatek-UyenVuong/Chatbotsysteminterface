@@ -3,6 +3,8 @@ import { HomePage } from './components/HomePage';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { DocumentViewer } from './components/DocumentViewer';
 import { ChatbotInterface } from './components/ChatbotInterface';
+import { ChatSession } from './components/ChatSession';
+import { FolderSelectionModal, FolderType } from './components/FolderSelectionModal';
 import { LoginPage } from './components/LoginPage';
 import { Toaster } from 'sonner@2.0.3';
 
@@ -12,6 +14,7 @@ export interface Document {
   uploadDate: string;
   size: string;
   content: string;
+  folderId?: string;
 }
 
 export interface Chatbot {
@@ -47,7 +50,15 @@ export interface RelatedDocument {
   page: number;
 }
 
-type Screen = 'login' | 'home' | 'library' | 'viewer' | 'chatbot';
+export interface ChatSessionData {
+  id: string;
+  folderId: string;
+  folderName: string;
+  documentIds: string[];
+  messages: Message[];
+}
+
+type Screen = 'login' | 'home' | 'library' | 'viewer' | 'chatbot' | 'session';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('login');
@@ -55,13 +66,69 @@ export default function App() {
   const [userEmail, setUserEmail] = useState<string>('');
   const [documents, setDocuments] = useState<Document[]>([]);
   const [chatbots, setChatbots] = useState<Chatbot[]>([]);
+  const [folders, setFolders] = useState<FolderType[]>([]);
+  const [chatSessions, setChatSessions] = useState<ChatSessionData[]>([]);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [selectedChatbotId, setSelectedChatbotId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [showFolderModal, setShowFolderModal] = useState(false);
+  const [pendingDocument, setPendingDocument] = useState<Document | null>(null);
 
   const handleLogin = (email: string, password: string) => {
     setIsAuthenticated(true);
     setUserEmail(email);
     setCurrentScreen('home');
+  };
+
+  const handleDocumentUploadRequest = (doc: Document) => {
+    setPendingDocument(doc);
+    setShowFolderModal(true);
+  };
+
+  const handleCreateFolder = (folderName: string): string => {
+    const newFolder: FolderType = {
+      id: `folder-${Date.now()}`,
+      name: folderName,
+      documentCount: 0,
+    };
+    setFolders(prev => [...prev, newFolder]);
+    return newFolder.id;
+  };
+
+  const handleSelectFolder = (folderId: string) => {
+    if (!pendingDocument) return;
+
+    const folder = folders.find(f => f.id === folderId);
+    if (!folder) return;
+
+    // Add document with folderId
+    const docWithFolder = { ...pendingDocument, folderId };
+    setDocuments(prev => [...prev, docWithFolder]);
+
+    // Update folder document count
+    setFolders(prev =>
+      prev.map(f =>
+        f.id === folderId
+          ? { ...f, documentCount: f.documentCount + 1 }
+          : f
+      )
+    );
+
+    // Create chat session
+    const newSession: ChatSessionData = {
+      id: `session-${Date.now()}`,
+      folderId,
+      folderName: folder.name,
+      documentIds: [docWithFolder.id],
+      messages: [],
+    };
+    setChatSessions(prev => [...prev, newSession]);
+    setSelectedSessionId(newSession.id);
+
+    // Clean up and navigate
+    setPendingDocument(null);
+    setShowFolderModal(false);
+    setCurrentScreen('session');
   };
 
   const addDocument = (doc: Document) => {
@@ -112,6 +179,40 @@ export default function App() {
 
   const selectedDocument = documents.find(doc => doc.id === selectedDocumentId);
   const selectedChatbot = chatbots.find(bot => bot.id === selectedChatbotId);
+  const selectedSession = chatSessions.find(s => s.id === selectedSessionId);
+
+  const handleAddDocumentToSession = (documentId: string) => {
+    if (!selectedSessionId) return;
+    setChatSessions(prev =>
+      prev.map(session =>
+        session.id === selectedSessionId
+          ? { ...session, documentIds: [...session.documentIds, documentId] }
+          : session
+      )
+    );
+  };
+
+  const handleRemoveDocumentFromSession = (documentId: string) => {
+    if (!selectedSessionId) return;
+    setChatSessions(prev =>
+      prev.map(session =>
+        session.id === selectedSessionId
+          ? { ...session, documentIds: session.documentIds.filter(id => id !== documentId) }
+          : session
+      )
+    );
+  };
+
+  const handleSendMessageToSession = (message: Message) => {
+    if (!selectedSessionId) return;
+    setChatSessions(prev =>
+      prev.map(session =>
+        session.id === selectedSessionId
+          ? { ...session, messages: [...session.messages, message] }
+          : session
+      )
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -125,7 +226,7 @@ export default function App() {
         <>
           {currentScreen === 'home' && (
             <HomePage 
-              onDocumentUpload={addDocument}
+              onDocumentUpload={handleDocumentUploadRequest}
               onGoToLibrary={goToLibrary}
               onViewDocument={goToViewer}
               onCreateChatbot={createChatbot}
@@ -159,6 +260,33 @@ export default function App() {
               onSendMessage={(message) => addMessageToChatbot(selectedChatbot.id, message)}
               onViewDocument={goToViewer}
               onBack={goToHome}
+            />
+          )}
+
+          {currentScreen === 'session' && selectedSession && (
+            <ChatSession
+              sessionId={selectedSession.id}
+              documents={documents.filter(doc => 
+                selectedSession.documentIds.includes(doc.id)
+              )}
+              allDocuments={documents}
+              messages={selectedSession.messages}
+              onSendMessage={handleSendMessageToSession}
+              onAddDocument={handleAddDocumentToSession}
+              onRemoveDocument={handleRemoveDocumentFromSession}
+              onBack={goToHome}
+            />
+          )}
+
+          {showFolderModal && (
+            <FolderSelectionModal
+              folders={folders}
+              onCreateFolder={handleCreateFolder}
+              onSelectFolder={handleSelectFolder}
+              onClose={() => {
+                setShowFolderModal(false);
+                setPendingDocument(null);
+              }}
             />
           )}
         </>
